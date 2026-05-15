@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 
 import torch
-from utils import utils
+from src.utils import utils
 
 
 class LayoutExtractor:
@@ -194,7 +194,7 @@ class LayoutExtractor:
             for i in range(len(self.bbox_json)):
                 self.bbox_json[i]["image_bytes"] = str(self.bbox_json[i]["image_bytes"])
 
-            with open(output_path + ".json", "w") as f:
+            with open(output_path, "w") as f:
                 json.dump(self.bbox_json, f)
 
         return self.bbox_json

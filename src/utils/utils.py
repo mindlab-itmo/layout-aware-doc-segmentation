@@ -1,14 +1,47 @@
 import os
+import base64
+import numpy as np
+import cv2
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
 from bs4 import BeautifulSoup, Tag
 from pathlib import Path
 import re
+from typing import List, Dict
 
 
 from pdf2image import convert_from_path
 
+
+def process_pdf(doc_path): 
+    """Convert PDF to list of OpenCV images"""
+    pil_images = convert_from_path(doc_path)
+
+    cv2_images = []
+    for pil_img in pil_images:
+        cv2_img = np.array(pil_img)
+        cv2_img = cv2.cvtColor(cv2_img, cv2.COLOR_RGB2BGR)
+        cv2_images.append(cv2_img)
+    
+    return cv2_images
+
+def readb64(uri):
+   encoded_data = uri
+   nparr = np.frombuffer(base64.b64decode(encoded_data), np.uint8)
+   img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+   return img
+
+def encode_bbox(array):
+    retval, buffer = cv2.imencode(".jpg", array)
+    jpg_as_bytes = base64.b64encode(buffer)
+    return jpg_as_bytes
+
+def cosine_similarity(centoid1, centoid2):
+    centoid1, centoid2 = map(np.array, (centoid1, centoid2))
+    dot_product = np.dot(centoid1, centoid2)
+    magnitude1, magnitude2 = map(np.linalg.norm, (centoid1, centoid2))
+    return dot_product / (magnitude1 * magnitude2)
 
 def convert_doc(pdf_path):
 
@@ -125,3 +158,60 @@ def clean_and_format_html(full_predict):
             continue
     complete_html = f"""```html\n<html><body>\n{" ".join(output)}</body></html>\n```"""
     return complete_html
+
+def find_closest_elements(
+    bboxes: List,
+    query_point: tuple,
+    page_num: int = 0,
+    top_k: int = 1
+) -> List[Dict]:
+    page_bboxes = [
+        bbox for bbox in bboxes 
+        if bbox.get("page_num", 0) == page_num and not bbox.get("ignore", False)
+    ]
+    
+    if not page_bboxes:
+        return []
+    
+    distances = []
+    for idx, bbox in enumerate(page_bboxes):
+        centroid = bbox["centroid"]
+
+        similarity = cosine_similarity(query_point, centroid)
+        
+        distances.append({
+            "box_index": idx,
+            "box": bbox,
+            "centroid": centroid,
+            "cosine_similarity": float(similarity),
+        })
+    
+    distances.sort(key=lambda x: (1 - x["cosine_similarity"]))
+    
+    results = []
+    for item in distances[:top_k]:
+        result = {
+            "element": {
+                "name": item.get("name", "unknown"),
+                "box": item["box"],
+                "page_num": item.get("page_num", 0),
+                "description": item.get("description", ""),
+                "text": item.get("text", ""),
+            },
+            "centroid": item["centroid"],
+            "cosine_similarity": item["cosine_similarity"],
+        }
+        results.append(result)
+    
+    return results
+
+def downsample_image(image: np.ndarray, downsample_factor: int = 6) -> Image.Image:
+    if not isinstance(image, np.ndarray):
+        raise TypeError(f"Expected numpy array, got {type(image)}")
+
+    image = Image.fromarray(image)
+    output_size = (
+        max(1, image.width // downsample_factor),
+        max(1, image.height // downsample_factor),
+    )
+    return image.resize(output_size, Image.Resampling.LANCZOS)
