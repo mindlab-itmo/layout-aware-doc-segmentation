@@ -1,17 +1,17 @@
-import asyncio
-import base64
 import io
+import cv2
 import json
+import base64
+import numpy as np
+from dotenv import load_dotenv
+import asyncio
 from typing import List, Optional, Union
 
-import cv2
-import numpy as np
 import torch
-from dotenv import load_dotenv
-from openai import AsyncOpenAI, OpenAI
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from openai import OpenAI, AsyncOpenAI
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
-from utils import utils
+from src.utils import utils
 
 load_dotenv()
 
@@ -23,7 +23,7 @@ class ImageDescription:
         pages: list = [],
         bbox_json: list = None,
         device: str = "cuda",
-        model_name: str = "qwen2.5vl:32b",
+        model_name: str = "qwen3.6:35b-a3b-128k",
         use_async: bool = False,
     ) -> None:
         """Class for LLM usage: it uses either the results
@@ -59,7 +59,6 @@ class ImageDescription:
 
             self.processor = AutoProcessor.from_pretrained(self.model_name)
 
-
         self.prompt = """
             Describe the document fragment in detail. Use the context of the full page that the fragment belongs to.
             Return description and recognized text from the object in JSON format ("description", "text")
@@ -89,15 +88,15 @@ class ImageDescription:
         """Prepare base64 encoded image data from bbox_idx or bounding_box"""
         if bbox_idx is not None:
             cropped_img_byte = self.bbox_json[bbox_idx]["image_bytes"]
-            
+
             if isinstance(cropped_img_byte, str):
                 cropped_img_byte = eval(cropped_img_byte)
-            
+
             if isinstance(cropped_img_byte, bytes):
                 cropped_img_byte = cropped_img_byte.decode("utf-8")
-            
+
             cropped_img = self.readb64(cropped_img_byte)
-            
+
         elif bounding_box != None:
             x, y, w, h = [int(i) for i in bounding_box]
             cropped_img = self.image[y : y + h, x : x + w]
@@ -119,12 +118,10 @@ class ImageDescription:
         full_page = self.pages[self.bbox_json[bbox_idx]["page_num"]]
 
         if not isinstance(full_page, np.ndarray):
-            raise TypeError(
-                f"Expected numpy array for page, got {type(full_page)}"
-            )
+            raise TypeError(f"Expected numpy array for page, got {type(full_page)}")
 
         full_page_rgb = cv2.cvtColor(full_page, cv2.COLOR_BGR2RGB)
-        
+
         context_img = utils.downsample_image(full_page_rgb, downsample_factor)
 
         context_buffer = io.BytesIO()
@@ -135,10 +132,10 @@ class ImageDescription:
         return context_img_bytes
 
     def _build_messages(
-        self, 
-        cropped_img_byte: str, 
+        self,
+        cropped_img_byte: str,
         sys_prompt: str,
-        context_img_byte: Optional[str] = None
+        context_img_byte: Optional[str] = None,
     ) -> List[dict]:
         """Build messages for API call with optional context image"""
         content = [
@@ -146,19 +143,19 @@ class ImageDescription:
         ]
 
         if context_img_byte is not None:
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{context_img_byte}"
-                },
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{context_img_byte}"},
+                }
+            )
 
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{cropped_img_byte}"
-            },
-        })
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{cropped_img_byte}"},
+            }
+        )
 
         messages = [
             {"role": "system", "content": sys_prompt},
@@ -179,7 +176,7 @@ class ImageDescription:
         use_context: bool = True,
     ) -> str:
         """Async inference method for API calls
-        
+
         Args:
             bbox_idx: Index of bbox in bbox_json
             bounding_box: Alternative to bbox_idx - direct bounding box coordinates
@@ -189,14 +186,16 @@ class ImageDescription:
             use_context: Whether to include full page context (only works with bbox_idx)
         """
         if not self.use_api or not self.use_async:
-            raise ValueError("Async inference only available with use_api=True and use_async=True")
+            raise ValueError(
+                "Async inference only available with use_api=True and use_async=True"
+            )
 
         cropped_img_byte = self._prepare_image_data(bbox_idx, bounding_box)
 
         context_img_byte = None
         if use_context and bbox_idx is not None:
             context_img_byte = self._prepare_context_image(bbox_idx, downsample_factor)
-        
+
         messages = self._build_messages(cropped_img_byte, sys_prompt, context_img_byte)
 
         try:
@@ -222,7 +221,7 @@ class ImageDescription:
         use_context: bool = True,
     ) -> List[str]:
         """Process multiple bboxes concurrently with rate limiting
-        
+
         Args:
             bbox_indices: List of bbox indices to process
             bounding_boxes: Alternative - list of bounding box coordinates
@@ -255,14 +254,10 @@ class ImageDescription:
         # Create tasks for async
         tasks = []
         if bbox_indices:
-            tasks = [
-                process_with_semaphore(bbox_idx=idx) 
-                for idx in bbox_indices
-            ]
+            tasks = [process_with_semaphore(bbox_idx=idx) for idx in bbox_indices]
         else:
             tasks = [
-                process_with_semaphore(bounding_box=bbox) 
-                for bbox in bounding_boxes
+                process_with_semaphore(bounding_box=bbox) for bbox in bounding_boxes
             ]
 
         results = await asyncio.gather(*tasks, return_exceptions=False)
@@ -302,9 +297,13 @@ class ImageDescription:
         if self.use_api:
             context_img_byte = None
             if use_context and bbox_idx is not None:
-                context_img_byte = self._prepare_context_image(bbox_idx, downsample_factor)
-            
-            messages = self._build_messages(cropped_img_byte, sys_prompt, context_img_byte)
+                context_img_byte = self._prepare_context_image(
+                    bbox_idx, downsample_factor
+                )
+
+            messages = self._build_messages(
+                cropped_img_byte, sys_prompt, context_img_byte
+            )
 
             try:
                 response = self.model.chat.completions.create(
@@ -367,7 +366,7 @@ class ImageDescription:
         use_context=True,
     ) -> List[dict]:
         """Process all bboxes in bbox_json asynchronously
-        
+
         Args:
             sys_prompt: System prompt for the model
             max_new_tokens: Maximum tokens to generate
@@ -381,7 +380,8 @@ class ImageDescription:
 
         if filter_ignored:
             bbox_indices = [
-                i for i, bbox in enumerate(self.bbox_json)
+                i
+                for i, bbox in enumerate(self.bbox_json)
                 if not bbox.get("ignore", False)
             ]
         else:

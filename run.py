@@ -118,7 +118,7 @@ async def run_segmentation_async(
 
 def run_segmentation(
     doc_path: str,
-    output_path: str = "/home/lameus/Projects/nirsii/book/book.json",
+    output_path: str = "/home/lameus/Projects/layout-aware-doc-segmentation/data/nirsii_result.json",
     save_img: bool = False,
     device: str = "cuda",
     use_api: bool = True,
@@ -218,6 +218,7 @@ if __name__ == "__main__":
     # Async version 
     run_segmentation(
         doc_path="./part.pdf",
+        output_path="./data/part_result.json",
         use_async=True,
         max_concurrent=3  
     )
