@@ -441,6 +441,3 @@ def run_graph_building(
 
     return report, graph
 
-
-# run_graph_building("/home/lameus/Projects/layout-aware-doc-segmentation/data/kerr_part.json",
-#                    "/home/lameus/Projects/layout-aware-doc-segmentation/data/kerr_part_graph_1.json")

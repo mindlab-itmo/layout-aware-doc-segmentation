@@ -1,4 +1,5 @@
 import io
+import re
 import cv2
 import json
 import base64
@@ -61,20 +62,37 @@ class ImageDescription:
 
             self.processor = AutoProcessor.from_pretrained(self.model_name)
 
-        self.prompt = """
-            Describe the document fragment in detail. Use the context of the full page that the fragment belongs to.
-            Return description and recognized text from the object in JSON format ("description", "text")
-            """
+        self.prompt = (
+            "Describe the document fragment in detail. "
+            "Use the context of the full page that the fragment belongs to. "
+            'Respond with ONLY a JSON object — no markdown, no extra text — '
+            'with exactly two keys: "description" (string) and "text" (string).'
+        )
 
     def _parse_json(self, json_output):
         """Response postprocessing"""
-        lines = json_output.splitlines()
-        for i, line in enumerate(lines):
-            if line == "```json":
-                json_output = "\n".join(lines[i + 1 :])
-                json_output = json_output.split("```")[0]
-                break
-        return json.loads(json_output)
+        text = json_output.strip()
+
+        if "```" in text:
+            for fence in ("```json", "```"):
+                if fence in text:
+                    parts = text.split(fence)
+                    for part in parts[1:]:
+                        candidate = part.split("```")[0].strip()
+                        if candidate:
+                            text = candidate
+                            break
+                    break
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+
+        raise ValueError(f"Could not parse JSON from LLM output: {json_output[:200]!r}")
 
     def load_doc(self, doc_path):
         self.image = cv2.imread(doc_path)
@@ -96,8 +114,6 @@ class ImageDescription:
 
             if isinstance(cropped_img_byte, bytes):
                 cropped_img_byte = cropped_img_byte.decode("utf-8")
-
-            cropped_img = self.readb64(cropped_img_byte)
 
         elif bounding_box != None:
             x, y, w, h = [int(i) for i in bounding_box]
@@ -173,7 +189,7 @@ class ImageDescription:
         bbox_idx: int = None,
         bounding_box=None,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=1024,
+        max_new_tokens=2048,
         downsample_factor: int = 6,
     ) -> str:
         """Async inference method for API calls
@@ -194,7 +210,9 @@ class ImageDescription:
 
         context_img_byte = None
         if self.use_context and bbox_idx is not None:
-            context_img_byte = self._prepare_context_image(bbox_idx, downsample_factor)
+            name = self.bbox_json[bbox_idx].get("name", "")
+            if name not in ("plain text", "title"):
+                context_img_byte = self._prepare_context_image(bbox_idx, downsample_factor)
 
         messages = self._build_messages(cropped_img_byte, sys_prompt, context_img_byte)
 
@@ -203,9 +221,16 @@ class ImageDescription:
                 model=self.model_name,
                 messages=messages,
                 max_tokens=max_new_tokens,
+                response_format={"type": "json_object"},
                 extra_body={"enable_thinking": False},
             )
-            output_text = response.choices[0].message.content
+            choice = response.choices[0]
+            output_text = choice.message.content
+            if not output_text:
+                raise ValueError(
+                    f"Empty LLM content for bbox_idx={bbox_idx}; "
+                    f"finish_reason={choice.finish_reason!r}"
+                )
             return output_text
         except Exception as e:
             print(f"Async API call failed for bbox_idx {bbox_idx}: {e}")
@@ -216,7 +241,7 @@ class ImageDescription:
         bbox_indices: List[int] = None,
         bounding_boxes: List = None,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=1024,
+        max_new_tokens=2048,
         max_concurrent: int = 10,
         downsample_factor: int = 6,
     ) -> List[str]:
@@ -266,7 +291,7 @@ class ImageDescription:
         bbox_idx: int = None,
         bounding_box=None,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=1024,
+        max_new_tokens=2048,
         return_input=False,
         downsample_factor: int = 6,
     ):
@@ -292,9 +317,11 @@ class ImageDescription:
         if self.use_api:
             context_img_byte = None
             if self.use_context and bbox_idx is not None:
-                context_img_byte = self._prepare_context_image(
-                    bbox_idx, downsample_factor
-                )
+                name = self.bbox_json[bbox_idx].get("name", "")
+                if name not in ("plain text", "title"):
+                    context_img_byte = self._prepare_context_image(
+                        bbox_idx, downsample_factor
+                    )
 
             messages = self._build_messages(
                 cropped_img_byte, sys_prompt, context_img_byte
@@ -305,9 +332,16 @@ class ImageDescription:
                     model=self.model_name,
                     messages=messages,
                     max_tokens=max_new_tokens,
+                    response_format={"type": "json_object"},
                     extra_body={"enable_thinking": False},
                 )
-                output_text = response.choices[0].message.content
+                choice = response.choices[0]
+                output_text = choice.message.content
+                if not output_text:
+                    raise ValueError(
+                        f"Empty LLM content for bbox_idx={bbox_idx}; "
+                        f"finish_reason={choice.finish_reason!r}"
+                    )
                 return output_text
             except Exception as e:
                 print(f"API call failed: {e}")
@@ -355,7 +389,7 @@ class ImageDescription:
     async def process_all_bboxes_async(
         self,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=1024,
+        max_new_tokens=2048,
         max_concurrent=10,
         filter_ignored=True,
         downsample_factor=6,
