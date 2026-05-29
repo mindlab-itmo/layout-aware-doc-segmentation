@@ -52,6 +52,7 @@ def build_document_graph(
     add_caption_edges: bool = True,
     add_header_paragraph_edges: bool = True,
     add_text_reference_edges: bool = True,
+    add_page_sequence_edges: bool = True,
 ) -> dict:
     """Build a graph from the segmentation report.
 
@@ -72,6 +73,8 @@ def build_document_graph(
             linking headers to nearby paragraphs.
         add_text_reference_edges (bool): Add ``text_references`` edges linking
             paragraphs to figures / tables mentioned via patterns like "Fig. 1".
+        add_page_sequence_edges (bool): Add ``next_page`` edges between
+            consecutive page nodes in document order.
 
     Returns:
         dict: ``{"nodes": [...], "edges": [...], "meta": {...}}``
@@ -125,6 +128,9 @@ def build_document_graph(
 
     if add_reading_order:
         _build_reading_order_edges(report, elem_id_map, nodes, edges)
+
+    if add_page_sequence_edges:
+        _build_page_sequence_edges(page_nums, nodes, edges)
 
     meta = {
         "total_pages":    len(page_nums),
@@ -388,18 +394,31 @@ def _build_reading_order_edges(
             )
 
 
+def _build_page_sequence_edges(
+    page_nums: List[int],
+    nodes: Dict[str, dict],
+    edges: List[dict],
+) -> None:
+    """Chain page nodes in document order with ``next_page`` edges."""
+    for i in range(len(page_nums) - 1):
+        _add_edge(
+            nodes, edges,
+            f"page_{page_nums[i]}",
+            f"page_{page_nums[i + 1]}",
+            "next_page",
+        )
+
+
 def run_graph_building(
     report_path: str = None,
-    output_path: str = "./book.json",
-    graph_output_path: Optional[str] = None,
+    output_path: Optional[str] = None,
     **seg_kwargs,
 ) -> Tuple[List[dict], dict]:
     """Convenience wrapper: runs segmentation then builds the graph.
 
     Args:
         report_path (str): path to JSON obtained with segmentation
-        output_path (str): Where to save the flat segmentation JSON.
-        graph_output_path (str or None): Where to save the graph JSON.
+        output_path (str or None): Where to save the graph JSON.
             If None, defaults to ``output_path`` with ``_graph`` suffix.
         **seg_kwargs: Forwarded to ``run_segmentation()`` (e.g. ``device``,
             ``use_api``, ``use_async``, ``max_concurrent``).
@@ -415,14 +434,13 @@ def run_graph_building(
 
     graph = build_document_graph(report)
 
-    if graph_output_path is None:
+    if output_path is None:
         base, ext = os.path.splitext(output_path)
         graph_output_path = f"{base}_graph{ext}"
 
-    save_graph(graph, graph_output_path)
-    print(f"Graph saved to {graph_output_path}  "
+    save_graph(graph, output_path)
+    print(f"Graph saved to {output_path}  "
           f"({graph['meta']['total_nodes']} nodes, "
           f"{graph['meta']['total_edges']} edges)")
 
     return report, graph
-
