@@ -195,7 +195,7 @@ class LayoutExtractor:
                 self.bbox_json[i]["image_bytes"] = str(self.bbox_json[i]["image_bytes"])
 
             with open(output_path, "w") as f:
-                json.dump(self.bbox_json, f)
+                json.dump(self.bbox_json, f, ensure_ascii=False, indent=2)
 
         return self.bbox_json
 
@@ -488,9 +488,8 @@ class LayoutExtractor:
 
                 cond_gap = vgap <= max(min_h * distance_ratio, abs_gap_px)
                 cond_hx = hx >= 0.35
-                cond_vert_overlap = vgap < 0
 
-                if cond_gap and (cond_hx or cond_vert_overlap):
+                if cond_gap and cond_hx:
                     primary_box = {
                         "x1": min(primary_box["x1"], box_j["x1"]),
                         "y1": min(primary_box["y1"], box_j["y1"]),
@@ -499,9 +498,7 @@ class LayoutExtractor:
                     }
                     cluster.append(idx_j)
                     removed.add(idx_j)
-                    j += 1
-                else:
-                    break
+                j += 1
 
             if len(cluster) > 1:
                 primary_idx = cluster[0]

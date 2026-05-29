@@ -18,7 +18,8 @@ async def run_segmentation_async(
     use_api: bool = True,
     num_attempt: int = 10,
     max_concurrent: int = 3,
-    use_async: bool = True
+    use_async: bool = True,
+    use_context: bool = True
 ):
     """Async version with batch processing"""
     print("Extracting layout...")
@@ -40,7 +41,8 @@ async def run_segmentation_async(
         use_api=use_api,
         use_async=use_async,
         pages=pages,
-        bbox_json=layout_extractor.bbox_json
+        bbox_json=layout_extractor.bbox_json,
+        use_context=use_context
     )
 
     valid_indices = [
@@ -71,14 +73,16 @@ async def run_segmentation_async(
             except json.JSONDecodeError as e:
                 print(f"JSON parsing error for bbox {bbox_idx}, attempt {attempt + 1}: {e}")
                 attempt += 1
+                await asyncio.sleep(1)
                 if attempt < num_attempt:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(3)
                 
             except Exception as e:
                 print(f"Error processing bbox {bbox_idx}, attempt {attempt + 1}: {e}")
                 attempt += 1
+                await asyncio.sleep(1)
                 if attempt < num_attempt:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(3)
 
         return {"success": False, "bbox_idx": bbox_idx}
 
@@ -119,12 +123,13 @@ async def run_segmentation_async(
 def run_segmentation(
     doc_path: str,
     output_path: str = "/home/lameus/Projects/layout-aware-doc-segmentation/data/nirsii_result.json",
-    save_img: bool = False,
+    save_img: bool = True,
     device: str = "cuda",
     use_api: bool = True,
     num_attempt: int = 10,
     max_concurrent: int = 10,
-    use_async: bool = True
+    use_async: bool = True,
+    use_context: bool = True
 ):  
     if use_async and use_api:
         # Run async version
@@ -137,7 +142,8 @@ def run_segmentation(
                 use_api=use_api,
                 num_attempt=num_attempt,
                 max_concurrent=max_concurrent,
-                use_async=use_async
+                use_async=use_async,
+                use_context=use_context
             )
         )
     else:
@@ -148,7 +154,8 @@ def run_segmentation(
             save_img=save_img,
             device=device,
             use_api=use_api,
-            num_attempt=num_attempt
+            num_attempt=num_attempt,
+            use_context=use_context
         )
 
 
@@ -158,7 +165,8 @@ def run_segmentation_sync(
     save_img: bool = False,
     device: str = "cuda",
     use_api: bool = True,
-    num_attempt: int = 3
+    num_attempt: int = 3,
+    use_context: bool = True
 ):
     layout_extractor = LayoutExtractor(save_img=save_img, device=device)
 
@@ -170,7 +178,8 @@ def run_segmentation_sync(
     layout_extractor._merge_adjacent_plain_texts(distance_ratio=0.25, abs_gap_px=18)
     layout_extractor._detect_captions_around_figures(distance_ratio=0.1)
 
-    ocr_vlm = ImageDescription(use_api=use_api, pages=pages, bbox_json=layout_extractor.bbox_json)
+    ocr_vlm = ImageDescription(use_api=use_api, pages=pages, bbox_json=layout_extractor.bbox_json,
+                               use_context=use_context)
     resulted_data = []
 
     print("VLM processing")
@@ -215,11 +224,11 @@ def run_segmentation_sync(
 
 
 if __name__ == "__main__":
-    # Async version 
     run_segmentation(
         doc_path="./part.pdf",
         output_path="./data/part_result.json",
         use_async=True,
-        max_concurrent=3  
+        max_concurrent=3,
+        use_context=False  
     )
     

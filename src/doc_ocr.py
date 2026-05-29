@@ -25,6 +25,7 @@ class ImageDescription:
         device: str = "cuda",
         model_name: str = "qwen3.6:35b-a3b-128k",
         use_async: bool = False,
+        use_context: bool = True
     ) -> None:
         """Class for LLM usage: it uses either the results
         of doc_layout or it can process a file from scratch.
@@ -40,6 +41,7 @@ class ImageDescription:
 
         self.use_api = use_api
         self.use_async = use_async
+        self.use_context = use_context
         self.pages = pages
         self.model_name = model_name
         self.device = device
@@ -173,7 +175,6 @@ class ImageDescription:
         sys_prompt="You are a technical document specialist.",
         max_new_tokens=1024,
         downsample_factor: int = 6,
-        use_context: bool = True,
     ) -> str:
         """Async inference method for API calls
 
@@ -183,7 +184,6 @@ class ImageDescription:
             sys_prompt: System prompt for the model
             max_new_tokens: Maximum tokens to generate
             downsample_factor: Factor to downsample context image
-            use_context: Whether to include full page context (only works with bbox_idx)
         """
         if not self.use_api or not self.use_async:
             raise ValueError(
@@ -193,7 +193,7 @@ class ImageDescription:
         cropped_img_byte = self._prepare_image_data(bbox_idx, bounding_box)
 
         context_img_byte = None
-        if use_context and bbox_idx is not None:
+        if self.use_context and bbox_idx is not None:
             context_img_byte = self._prepare_context_image(bbox_idx, downsample_factor)
 
         messages = self._build_messages(cropped_img_byte, sys_prompt, context_img_byte)
@@ -203,6 +203,7 @@ class ImageDescription:
                 model=self.model_name,
                 messages=messages,
                 max_tokens=max_new_tokens,
+                extra_body={"enable_thinking": False},
             )
             output_text = response.choices[0].message.content
             return output_text
@@ -218,7 +219,6 @@ class ImageDescription:
         max_new_tokens=1024,
         max_concurrent: int = 10,
         downsample_factor: int = 6,
-        use_context: bool = True,
     ) -> List[str]:
         """Process multiple bboxes concurrently with rate limiting
 
@@ -229,7 +229,6 @@ class ImageDescription:
             max_new_tokens: Maximum tokens to generate
             max_concurrent: Maximum concurrent API calls
             downsample_factor: Factor to downsample context images
-            use_context: Whether to include full page context (only for bbox_indices)
         """
         if bbox_indices is None and bounding_boxes is None:
             raise ValueError("Must provide either bbox_indices or bounding_boxes")
@@ -245,7 +244,6 @@ class ImageDescription:
                         sys_prompt=sys_prompt,
                         max_new_tokens=max_new_tokens,
                         downsample_factor=downsample_factor,
-                        use_context=use_context,
                     )
                     return {"success": True, "result": result, "bbox_idx": bbox_idx}
                 except Exception as e:
@@ -271,7 +269,6 @@ class ImageDescription:
         max_new_tokens=1024,
         return_input=False,
         downsample_factor: int = 6,
-        use_context: bool = True,
     ):
         """The main method to run document with LLM (synchronous).
 
@@ -283,8 +280,6 @@ class ImageDescription:
             return_input (bool, optional): Option to define return result of processor or not,
             works only for local model. Defaults to False.
             downsample_factor (int, optional): Factor to downsample context image. Defaults to 6.
-            use_context (bool, optional): Whether to include full page context. Defaults to True.
-
         Raises:
             NotImplementedError: "Should be selected bbox_idx or bounding_box as input"
 
@@ -296,7 +291,7 @@ class ImageDescription:
 
         if self.use_api:
             context_img_byte = None
-            if use_context and bbox_idx is not None:
+            if self.use_context and bbox_idx is not None:
                 context_img_byte = self._prepare_context_image(
                     bbox_idx, downsample_factor
                 )
@@ -310,6 +305,7 @@ class ImageDescription:
                     model=self.model_name,
                     messages=messages,
                     max_tokens=max_new_tokens,
+                    extra_body={"enable_thinking": False},
                 )
                 output_text = response.choices[0].message.content
                 return output_text
@@ -363,7 +359,6 @@ class ImageDescription:
         max_concurrent=10,
         filter_ignored=True,
         downsample_factor=6,
-        use_context=True,
     ) -> List[dict]:
         """Process all bboxes in bbox_json asynchronously
 
@@ -373,7 +368,6 @@ class ImageDescription:
             max_concurrent: Maximum concurrent API calls
             filter_ignored: Whether to filter out bboxes marked as ignored
             downsample_factor: Factor to downsample context images
-            use_context: Whether to include full page context
         """
         if self.bbox_json is None:
             raise ValueError("bbox_json is not set")
@@ -393,7 +387,6 @@ class ImageDescription:
             max_new_tokens=max_new_tokens,
             max_concurrent=max_concurrent,
             downsample_factor=downsample_factor,
-            use_context=use_context,
         )
 
         return results

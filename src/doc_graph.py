@@ -434,13 +434,13 @@ def run_graph_building(
 
     graph = build_document_graph(report)
 
-    if output_path is None:
-        base, ext = os.path.splitext(output_path)
-        graph_output_path = f"{base}_graph{ext}"
-
     save_graph(graph, output_path)
     print(f"Graph saved to {output_path}  "
           f"({graph['meta']['total_nodes']} nodes, "
           f"{graph['meta']['total_edges']} edges)")
 
     return report, graph
+
+
+# run_graph_building("/home/lameus/Projects/layout-aware-doc-segmentation/data/kerr_part.json",
+#                    "/home/lameus/Projects/layout-aware-doc-segmentation/data/kerr_part_graph_1.json")
