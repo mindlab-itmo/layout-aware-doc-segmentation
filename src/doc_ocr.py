@@ -3,6 +3,7 @@ import re
 import cv2
 import json
 import base64
+import warnings
 import numpy as np
 from dotenv import load_dotenv
 import asyncio
@@ -27,7 +28,7 @@ class ImageDescription:
         model_name: str = "qwen3.6:35b-a3b-128k",
         use_async: bool = False,
         use_context: bool = True,
-        max_new_tokens: int = 1024
+        max_new_tokens: int = 2048
     ) -> None:
         """Class for LLM usage: it uses either the results
         of doc_layout or it can process a file from scratch.
@@ -93,9 +94,60 @@ class ImageDescription:
 
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
-            return json.loads(match.group())
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
 
-        raise ValueError(f"Could not parse JSON from LLM output: {json_output[:200]!r}")
+        try:
+            return self._attempt_json_fix(text)
+        except Exception:
+            warnings.warn(
+                f"Could not parse JSON from LLM output: {json_output[:200]!r}, "
+                "returning fallback object"
+            )
+            return {"description": "", "text": ""}
+
+    def _attempt_json_fix(self, text):
+        """Attempt to fix truncated JSON"""
+        text = text.strip()
+        
+        if not text.startswith("{"):
+            raise ValueError("Not a JSON object")
+        
+        open_braces = 0
+        in_string = False
+        escape_next = False
+        
+        for i, char in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == "\\":
+                escape_next = True
+                continue
+            
+            if char == '"':
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if char == "{":
+                    open_braces += 1
+                elif char == "}":
+                    open_braces -= 1
+        
+        fixed = text
+        
+        if in_string:
+            fixed += '"'
+        
+        while open_braces > 0:
+            fixed += "}"
+            open_braces -= 1
+        
+        return json.loads(fixed)
 
     def load_doc(self, doc_path):
         self.image = cv2.imread(doc_path)
