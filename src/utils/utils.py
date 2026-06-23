@@ -1,4 +1,5 @@
 import os
+import json
 import base64
 import numpy as np
 import cv2
@@ -8,7 +9,7 @@ from io import BytesIO
 from bs4 import BeautifulSoup, Tag
 from pathlib import Path
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 from pdf2image import convert_from_path
@@ -215,3 +216,7 @@ def downsample_image(image: np.ndarray, downsample_factor: int = 6) -> Image.Ima
         max(1, image.height // downsample_factor),
     )
     return image.resize(output_size, Image.Resampling.LANCZOS)
+
+def save_json(data: List[Dict], output_path: str):
+    with open(output_path, "w", encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)

@@ -26,7 +26,8 @@ class ImageDescription:
         device: str = "cuda",
         model_name: str = "qwen3.6:35b-a3b-128k",
         use_async: bool = False,
-        use_context: bool = True
+        use_context: bool = True,
+        max_new_tokens: int = 1024
     ) -> None:
         """Class for LLM usage: it uses either the results
         of doc_layout or it can process a file from scratch.
@@ -68,6 +69,8 @@ class ImageDescription:
             'Respond with ONLY a JSON object — no markdown, no extra text — '
             'with exactly two keys: "description" (string) and "text" (string).'
         )
+        
+        self.max_new_tokens = max_new_tokens
 
     def _parse_json(self, json_output):
         """Response postprocessing"""
@@ -189,7 +192,6 @@ class ImageDescription:
         bbox_idx: int = None,
         bounding_box=None,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=2048,
         downsample_factor: int = 6,
     ) -> str:
         """Async inference method for API calls
@@ -198,7 +200,6 @@ class ImageDescription:
             bbox_idx: Index of bbox in bbox_json
             bounding_box: Alternative to bbox_idx - direct bounding box coordinates
             sys_prompt: System prompt for the model
-            max_new_tokens: Maximum tokens to generate
             downsample_factor: Factor to downsample context image
         """
         if not self.use_api or not self.use_async:
@@ -220,7 +221,7 @@ class ImageDescription:
             response = await self.model.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                max_tokens=max_new_tokens,
+                max_tokens=self.max_new_tokens,
                 response_format={"type": "json_object"},
                 extra_body={"enable_thinking": False},
             )
@@ -241,7 +242,6 @@ class ImageDescription:
         bbox_indices: List[int] = None,
         bounding_boxes: List = None,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=2048,
         max_concurrent: int = 10,
         downsample_factor: int = 6,
     ) -> List[str]:
@@ -251,7 +251,6 @@ class ImageDescription:
             bbox_indices: List of bbox indices to process
             bounding_boxes: Alternative - list of bounding box coordinates
             sys_prompt: System prompt for the model
-            max_new_tokens: Maximum tokens to generate
             max_concurrent: Maximum concurrent API calls
             downsample_factor: Factor to downsample context images
         """
@@ -267,7 +266,6 @@ class ImageDescription:
                         bbox_idx=bbox_idx,
                         bounding_box=bounding_box,
                         sys_prompt=sys_prompt,
-                        max_new_tokens=max_new_tokens,
                         downsample_factor=downsample_factor,
                     )
                     return {"success": True, "result": result, "bbox_idx": bbox_idx}
@@ -291,7 +289,6 @@ class ImageDescription:
         bbox_idx: int = None,
         bounding_box=None,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=2048,
         return_input=False,
         downsample_factor: int = 6,
     ):
@@ -301,7 +298,6 @@ class ImageDescription:
             bbox_idx (int, optional): an option to process specific bbox from bbox_json. Defaults to None.
             bounding_box (_type_, optional): an option to process the area of a document. Defaults to None.
             sys_prompt (str, optional): system prompt. Defaults to "You are a helpful assistant.".
-            max_new_tokens (int, optional): _. Defaults to 1024.
             return_input (bool, optional): Option to define return result of processor or not,
             works only for local model. Defaults to False.
             downsample_factor (int, optional): Factor to downsample context image. Defaults to 6.
@@ -331,7 +327,7 @@ class ImageDescription:
                 response = self.model.chat.completions.create(
                     model=self.model_name,
                     messages=messages,
-                    max_tokens=max_new_tokens,
+                    max_tokens=self.max_new_tokens,
                     response_format={"type": "json_object"},
                     extra_body={"enable_thinking": False},
                 )
@@ -371,7 +367,7 @@ class ImageDescription:
             )
             inputs = inputs.to(self.device)
 
-            output_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
+            output_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
             generated_ids = [
                 output_ids[len(input_ids) :]
                 for input_ids, output_ids in zip(inputs.input_ids, output_ids)
@@ -389,7 +385,6 @@ class ImageDescription:
     async def process_all_bboxes_async(
         self,
         sys_prompt="You are a technical document specialist.",
-        max_new_tokens=2048,
         max_concurrent=10,
         filter_ignored=True,
         downsample_factor=6,
@@ -398,7 +393,6 @@ class ImageDescription:
 
         Args:
             sys_prompt: System prompt for the model
-            max_new_tokens: Maximum tokens to generate
             max_concurrent: Maximum concurrent API calls
             filter_ignored: Whether to filter out bboxes marked as ignored
             downsample_factor: Factor to downsample context images
@@ -418,7 +412,6 @@ class ImageDescription:
         results = await self.batch_inference_async(
             bbox_indices=bbox_indices,
             sys_prompt=sys_prompt,
-            max_new_tokens=max_new_tokens,
             max_concurrent=max_concurrent,
             downsample_factor=downsample_factor,
         )
