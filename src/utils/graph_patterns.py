@@ -44,3 +44,13 @@ _HEADER_TYPES = {"title"}
 
 # Types treated as body paragraphs
 _PARAGRAPH_TYPES = {"plain text"}
+
+# Content types that can belong to a title's section (everything that is not a
+# title and carries document content: paragraphs, figures, tables, formulas and
+# their captions / footnotes).
+_SECTION_MEMBER_TYPES = (
+    _PARAGRAPH_TYPES
+    | _CAPTIONABLE_TYPES
+    | _CAPTION_TYPES
+    | {"table_footnote"}
+)

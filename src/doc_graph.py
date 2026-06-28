@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.utils.graph_utils import load_graph, save_graph
 from src.utils.graph_patterns import (
     _PARAGRAPH_TYPES, _CAPTION_TYPES, _ELEM_TYPE_TO_CATEGORY,
-    _HEADER_TYPES, _CAPTIONABLE_TYPES, _REF_PATTERNS
+    _HEADER_TYPES, _CAPTIONABLE_TYPES, _REF_PATTERNS,
+    _SECTION_MEMBER_TYPES,
     )
 
 # helpers
@@ -31,9 +32,135 @@ def _distance(a: Tuple[float, float], b: Tuple[float, float]) -> float:
 
 
 def _sort_key_reading_order(elem: dict) -> Tuple[float, float]:
-    """Sort key that approximates top-to-bottom, left-to-right reading order."""
+    """Sort key that approximates top-to-bottom, left-to-right reading order
+    *within a single column*.  For multi-column pages use
+    :func:`_compute_reading_order_ranks`, which lays out columns correctly."""
     box = elem.get("box", {})
     return (box.get("y1", 0), box.get("x1", 0))
+
+
+def _detect_column_split(
+    cxs: List[float], content_width: float, gap_ratio: float,
+) -> Optional[float]:
+    """Find an x split between two columns from a set of element x-centroids.
+
+    Data-driven: looks for the largest horizontal gap between consecutive
+    centroids.  If that gap is wide enough (``>= gap_ratio * content_width``)
+    it is treated as the gutter and the midpoint is returned; otherwise the
+    band is single-column and ``None`` is returned.
+    """
+    if len(cxs) < 2 or content_width <= 0:
+        return None
+    s = sorted(cxs)
+    best_gap = 0.0
+    best_mid: Optional[float] = None
+    for a, b in zip(s, s[1:]):
+        gap = b - a
+        if gap > best_gap:
+            best_gap = gap
+            best_mid = (a + b) / 2.0
+    if best_mid is not None and best_gap >= gap_ratio * content_width:
+        return best_mid
+    return None
+
+
+def _order_band(
+    band: List[Tuple[int, dict]], content_width: float, gap_ratio: float,
+) -> List[int]:
+    """Order the elements of one horizontal band (the strip between two
+    full-width / spanning elements).  Detects a left/right column split and,
+    when found, emits the whole left column top-to-bottom before the whole
+    right column; otherwise falls back to plain reading order."""
+    if not band:
+        return []
+    cxs = [_centroid(e)[0] for _, e in band]
+    split = _detect_column_split(cxs, content_width, gap_ratio)
+    if split is None:
+        return [idx for idx, _ in
+                sorted(band, key=lambda t: _sort_key_reading_order(t[1]))]
+    left  = [(idx, e) for idx, e in band if _centroid(e)[0] <= split]
+    right = [(idx, e) for idx, e in band if _centroid(e)[0] >  split]
+    left.sort(key=lambda t: _sort_key_reading_order(t[1]))
+    right.sort(key=lambda t: _sort_key_reading_order(t[1]))
+    return [idx for idx, _ in left] + [idx for idx, _ in right]
+
+
+def _order_page_elements(
+    items: List[Tuple[int, dict]], *, span_ratio: float, gap_ratio: float,
+) -> List[int]:
+    """Return the indices of one page's elements in column-aware reading order.
+
+    Algorithm:
+      1. Classify elements as *spanning* (box width >= ``span_ratio`` of the
+         page content width — section titles, full-width figures / tables) or
+         *columnar* (everything else).
+      2. Spanning elements act as horizontal separators: they divide the page
+         into bands.  Each columnar element joins the band defined by how many
+         spanning elements sit above it (by vertical centroid).
+      3. Each band is ordered with :func:`_order_band` (left column, then right
+         column); bands and spanning elements are emitted top-to-bottom.
+
+    On a single-column page no left/right gutter is found, so the result is the
+    usual top-to-bottom order.
+    """
+    if not items:
+        return []
+
+    boxes = {idx: elem.get("box", {}) for idx, elem in items}
+    content_left  = min(b.get("x1", 0) for b in boxes.values())
+    content_right = max(b.get("x2", 0) for b in boxes.values())
+    content_width = content_right - content_left
+
+    spanning: List[Tuple[int, dict]] = []
+    columnar: List[Tuple[int, dict]] = []
+    for idx, elem in items:
+        b = boxes[idx]
+        width = b.get("x2", 0) - b.get("x1", 0)
+        if content_width > 0 and width >= span_ratio * content_width:
+            spanning.append((idx, elem))
+        else:
+            columnar.append((idx, elem))
+
+    spanning.sort(key=lambda t: _centroid(t[1])[1])
+    span_ys = [_centroid(e)[1] for _, e in spanning]
+
+    bands: Dict[int, List[Tuple[int, dict]]] = defaultdict(list)
+    for idx, elem in columnar:
+        cy = _centroid(elem)[1]
+        band = sum(1 for sy in span_ys if sy < cy)
+        bands[band].append((idx, elem))
+
+    result: List[int] = []
+    for b in range(len(spanning) + 1):
+        result.extend(_order_band(bands.get(b, []), content_width, gap_ratio))
+        if b < len(spanning):
+            result.append(spanning[b][0])
+    return result
+
+
+def _compute_reading_order_ranks(
+    report: List[dict], *, span_ratio: float = 0.8, gap_ratio: float = 0.2,
+) -> Dict[int, int]:
+    """Compute a document-global reading-order rank for every element index.
+
+    Pages are processed in order; within each page elements are laid out with
+    :func:`_order_page_elements` so that two-column layouts read down the left
+    column before the right.  The returned mapping ``idx -> rank`` is the single
+    source of truth for every ordering-dependent edge builder.
+    """
+    page_elements: Dict[int, List[Tuple[int, dict]]] = defaultdict(list)
+    for idx, elem in enumerate(report):
+        page_elements[elem.get("page_num", 0)].append((idx, elem))
+
+    ranks: Dict[int, int] = {}
+    rank = 0
+    for pn in sorted(page_elements):
+        for idx in _order_page_elements(
+            page_elements[pn], span_ratio=span_ratio, gap_ratio=gap_ratio,
+        ):
+            ranks[idx] = rank
+            rank += 1
+    return ranks
 
 
 def _extract_reference_number_from_caption(caption_text: str) -> Optional[int]:
@@ -50,9 +177,13 @@ def build_document_graph(
     header_paragraph_same_page: bool = True,
     add_reading_order: bool = True,
     add_caption_edges: bool = True,
-    add_header_paragraph_edges: bool = True,
+    add_header_paragraph_edges: bool = False,
+    add_section_grouping_edges: bool = True,
+    section_grouping_cross_page: bool = True,
     add_text_reference_edges: bool = True,
     add_page_sequence_edges: bool = True,
+    column_span_ratio: float = 0.8,
+    column_gap_ratio: float = 0.2,
 ) -> dict:
     """Build a graph from the segmentation report.
 
@@ -70,11 +201,26 @@ def build_document_graph(
         add_caption_edges (bool): Add ``caption_of`` edges linking captions to
             their figures / tables.
         add_header_paragraph_edges (bool): Add ``header_paragraph`` edges
-            linking headers to nearby paragraphs.
+            linking headers to nearby paragraphs by vertical distance.
+            Disabled by default: it is superseded by the reading-order based
+            ``section_member`` edges (see ``add_section_grouping_edges``).
+        add_section_grouping_edges (bool): Add ``section_member`` edges linking
+            each title to the plain-text / table / figure / formula elements
+            that follow it in reading order, until the next title is reached.
+        section_grouping_cross_page (bool): If True, a title's section continues
+            onto following pages until the next title; if False, grouping is
+            restricted to the title's own page.
         add_text_reference_edges (bool): Add ``text_references`` edges linking
             paragraphs to figures / tables mentioned via patterns like "Fig. 1".
         add_page_sequence_edges (bool): Add ``next_page`` edges between
             consecutive page nodes in document order.
+        column_span_ratio (float): An element whose box width is at least this
+            fraction of the page content width is treated as *spanning* (e.g. a
+            section title or full-width figure) rather than belonging to a
+            single column.  Used for column-aware reading order.
+        column_gap_ratio (float): Minimum horizontal gap between element
+            x-centroids — as a fraction of the page content width — for it to be
+            recognised as the gutter between two columns.
 
     Returns:
         dict: ``{"nodes": [...], "edges": [...], "meta": {...}}``
@@ -82,6 +228,12 @@ def build_document_graph(
 
     nodes: Dict[str, dict] = {}      # node_id → node dict
     edges: List[dict] = []           # list of edge dicts
+
+    # Document-global, column-aware reading order; the single source of truth
+    # for every ordering-dependent edge builder below.
+    order_ranks = _compute_reading_order_ranks(
+        report, span_ratio=column_span_ratio, gap_ratio=column_gap_ratio,
+    )
 
     page_nums = sorted({e.get("page_num", 0) for e in report})
 
@@ -123,11 +275,17 @@ def build_document_graph(
             same_page=header_paragraph_same_page,
         )
 
+    if add_section_grouping_edges:
+        _build_section_grouping_edges(
+            report, elem_id_map, nodes, edges, order_ranks,
+            cross_page=section_grouping_cross_page,
+        )
+
     if add_text_reference_edges:
-        _build_text_reference_edges(report, elem_id_map, nodes, edges)
+        _build_text_reference_edges(report, elem_id_map, nodes, edges, order_ranks)
 
     if add_reading_order:
-        _build_reading_order_edges(report, elem_id_map, nodes, edges)
+        _build_reading_order_edges(report, elem_id_map, nodes, edges, order_ranks)
 
     if add_page_sequence_edges:
         _build_page_sequence_edges(page_nums, nodes, edges)
@@ -270,6 +428,70 @@ def _build_header_paragraph_edges(
                     current_header_idx = None
 
 
+# section grouping (reading-order based)
+
+def _build_section_grouping_edges(
+    report: List[dict],
+    elem_id_map: Dict[int, str],
+    nodes: Dict[str, dict],
+    edges: List[dict],
+    order_ranks: Dict[int, int],
+    *,
+    cross_page: bool = True,
+) -> None:
+    """Group content elements under the title that heads their section.
+
+    Heuristic (reading-order based, not distance based): walk every element in
+    document reading order.  Each time a ``title`` is seen it becomes the
+    *current section head*.  Every subsequent content element (plain text,
+    table, figure, formula and their captions) is linked to that title with a
+    ``section_member`` edge — because they form one uninterrupted reading-order
+    sequence after the title — until the next title is reached, which starts a
+    new section.
+
+    This generalises the old distance-based ``header_paragraph`` link: tables
+    and figures that sit far below their title are still grouped correctly,
+    while encountering the next title cleanly terminates the previous section.
+
+    Args:
+        cross_page: If True, a section continues onto following pages until the
+            next title appears.  If False, only elements on the title's own page
+            are grouped (content on a later page with no title of its own is
+            left ungrouped).
+    """
+
+    # document reading order: pages in order, column-aware reading order within
+    # each page (see _compute_reading_order_ranks).
+    ordered = sorted(range(len(report)), key=lambda i: order_ranks[i])
+
+    current_title_idx: Optional[int] = None
+    current_title_page: Optional[int] = None
+
+    for idx in ordered:
+        elem = report[idx]
+        etype = elem.get("name", "")
+
+        if etype in _HEADER_TYPES:
+            current_title_idx = idx
+            current_title_page = elem.get("page_num", 0)
+            continue
+
+        if current_title_idx is None:
+            continue
+        if etype not in _SECTION_MEMBER_TYPES:
+            continue
+        if not cross_page and elem.get("page_num", 0) != current_title_page:
+            continue
+
+        _add_edge(
+            nodes, edges,
+            elem_id_map[current_title_idx],
+            elem_id_map[idx],
+            "section_member",
+            member_type=etype,
+        )
+
+
 # text-reference edges (regex)
 
 def _build_text_reference_edges(
@@ -277,6 +499,7 @@ def _build_text_reference_edges(
     elem_id_map: Dict[int, str],
     nodes: Dict[str, dict],
     edges: List[dict],
+    order_ranks: Dict[int, int],
 ) -> None:
     """Scan every ``plain text`` element's ``text`` field for patterns like
     "Fig. 1", "Table 2", etc.  When a match is found, link the paragraph
@@ -320,8 +543,7 @@ def _build_text_reference_edges(
         (idx, elem) for idx, elem in enumerate(report)
         if elem.get("name") in _CAPTIONABLE_TYPES
     ]
-    all_captionables.sort(key=lambda t: (t[1].get("page_num", 0),
-                                         _sort_key_reading_order(t[1])))
+    all_captionables.sort(key=lambda t: order_ranks[t[0]])
 
     positional_counter: Dict[str, int] = defaultdict(int)
     for idx, elem in all_captionables:
@@ -374,17 +596,17 @@ def _build_reading_order_edges(
     elem_id_map: Dict[int, str],
     nodes: Dict[str, dict],
     edges: List[dict],
+    order_ranks: Dict[int, int],
 ) -> None:
-    """Chain elements on each page in reading order (top → bottom,
-    left → right)."""
+    """Chain elements on each page in column-aware reading order (down the left
+    column, then the right; see _compute_reading_order_ranks)."""
 
     page_elements: Dict[int, List[Tuple[int, dict]]] = defaultdict(list)
     for idx, elem in enumerate(report):
         page_elements[elem.get("page_num", 0)].append((idx, elem))
 
     for pn in sorted(page_elements):
-        elems = sorted(page_elements[pn],
-                       key=lambda t: _sort_key_reading_order(t[1]))
+        elems = sorted(page_elements[pn], key=lambda t: order_ranks[t[0]])
         for i in range(len(elems) - 1):
             _add_edge(
                 nodes, edges,
