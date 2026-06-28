@@ -184,7 +184,7 @@ async def run_segmentation_async(
 
 def run_segmentation(
     doc_path: str,
-    output_path: str = "/home/lameus/Projects/layout-aware-doc-segmentation/data/nirsii_result.json",
+    output_path: str,
     save_img: bool = True,
     device: str = "cuda",
     use_api: bool = True,
